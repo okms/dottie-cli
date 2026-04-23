@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dottie-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Token-based CLI for team, conversations, equipment, and absence in Dottie HR"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
   { name = "OpenAI Codex" }
 ]

@@ -135,6 +135,71 @@ class DomainTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             service.conversation_history("Alex")
 
+    def test_conversation_history_falls_back_to_employee_scope_for_self(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [{"id": 42, "name": "Me"}],
+            [],
+            [
+                {"id": 11, "employeeId": 42, "responsibleEmployeeId": 99, "status": 1, "date": "2026-04-01T09:00:00Z"},
+                {"id": 12, "employeeId": 42, "responsibleEmployeeId": 99, "status": 0, "date": "2026-05-01T09:00:00Z"},
+            ],
+            [{"id": 200, "index": 1, "question": "Q1", "answer": "A1"}],
+            [{"id": 201, "index": 16, "question": "Q2", "answer": "A2"}],
+        ]
+
+        service = DottieService(client)
+        employee, meetings, answers_by_meeting = service.conversation_history("Me")
+
+        self.assertEqual(employee["id"], 42)
+        self.assertEqual([item["id"] for item in meetings], [11, 12])
+        self.assertEqual(answers_by_meeting[11][0]["answer"], "A1")
+        self.assertEqual(answers_by_meeting[12][0]["answer"], "A2")
+        self.assertEqual(
+            client.get.call_args_list[1].kwargs["query"],
+            {"ResponsibleEmployeeId": 42, "EmployeeId": [42]},
+        )
+        self.assertEqual(
+            client.get.call_args_list[2].kwargs["query"],
+            {"EmployeeId": [42]},
+        )
+
+    def test_upcoming_conversation_falls_back_to_employee_scope_for_self(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [{"id": 42, "name": "Me"}],
+            [],
+            [
+                {"id": 12, "employeeId": 42, "responsibleEmployeeId": 99, "status": 0, "date": "2026-05-01T09:00:00Z"},
+            ],
+            [
+                {"id": 201, "index": 16, "question": "Q2", "answer": "A2"},
+            ],
+        ]
+
+        service = DottieService(client)
+        employee, meeting, answers = service.upcoming_conversation("Me")
+
+        self.assertEqual(employee["id"], 42)
+        self.assertEqual(meeting["id"], 12)
+        self.assertEqual(answers[0]["answer"], "A2")
+
+    def test_upcoming_conversation_rejects_missing_upcoming_meeting(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [{"id": 7, "name": "Employee Name"}],
+            [
+                {"id": 10, "employeeId": 7, "responsibleEmployeeId": 42, "status": 1, "date": "2026-04-01T09:00:00Z"},
+            ],
+        ]
+
+        service = DottieService(client)
+        with self.assertRaisesRegex(ValueError, "No upcoming recurring meeting found"):
+            service.upcoming_conversation("Employee Name")
+
     def test_team_falls_back_to_recurring_meeting_responsibility(self) -> None:
         client = Mock()
         client.token_bundle = SimpleNamespace(claims={"app_uid": 42})

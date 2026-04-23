@@ -7,3 +7,6 @@ __pycache__/
 .env.*
 .dottie-token
 dottie-token.txt
+build/
+dist/
+*.egg-info/

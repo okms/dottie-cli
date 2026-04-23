@@ -9,6 +9,20 @@ from dottie_cli.cli import build_parser, handle_conversations, main
 
 
 class CliArgumentTests(unittest.TestCase):
+    def test_history_accepts_self_without_employee_name(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["conversations", "history", "--self"])
+
+        self.assertTrue(args.self_only)
+        self.assertIsNone(args.employee)
+
+    def test_upcoming_accepts_self_without_employee_name(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["conversations", "upcoming", "--self"])
+
+        self.assertTrue(args.self_only)
+        self.assertIsNone(args.employee)
+
     def test_sync_notes_rejects_apply_and_dry_run_together(self) -> None:
         parser = build_parser()
         with self.assertRaises(SystemExit):
@@ -125,6 +139,70 @@ class CliArgumentTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn('"headcount": 0', stdout.getvalue())
         self.assertIn('"organizationUnits": []', stdout.getvalue())
+
+    def test_history_output_shows_visible_answers_for_self(self) -> None:
+        service = Mock()
+        service.conversation_history.return_value = (
+            {"id": 42, "name": "Me"},
+            [{"id": 11, "date": "2026-04-01T09:00:00Z", "status": 1, "name": "Medarbeidersamtale"}],
+            {
+                11: [
+                    {"index": 1, "question": "Q1", "answer": "A1"},
+                    {"index": 2, "question": "Q2", "answer": None},
+                ]
+            },
+        )
+
+        args = argparse.Namespace(
+            command="conversations",
+            conversation_command="history",
+            employee=None,
+            self_only=True,
+            json=False,
+            token_file=None,
+        )
+
+        stdout = io.StringIO()
+        with patch("dottie_cli.cli.build_service", return_value=service):
+            with redirect_stdout(stdout):
+                exit_code = handle_conversations(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Employee: Me (42)", stdout.getvalue())
+        self.assertIn("[1] Q1: A1", stdout.getvalue())
+        self.assertNotIn("[2] Q2", stdout.getvalue())
+        service.conversation_history.assert_called_once_with(None, self_only=True)
+
+    def test_upcoming_output_shows_prefilled_visible_answers(self) -> None:
+        service = Mock()
+        service.upcoming_conversation.return_value = (
+            {"id": 42, "name": "Me"},
+            {"id": 12, "date": "2026-05-01T09:00:00Z", "status": 0, "name": "Medarbeidersamtale"},
+            [
+                {"index": 1, "question": "Q1", "answer": None},
+                {"index": 16, "question": "Tilbakemeldinger fra leder til medarbeider", "answer": "Bra jobbet"},
+            ],
+        )
+
+        args = argparse.Namespace(
+            command="conversations",
+            conversation_command="upcoming",
+            employee=None,
+            self_only=True,
+            json=False,
+            token_file=None,
+        )
+
+        stdout = io.StringIO()
+        with patch("dottie_cli.cli.build_service", return_value=service):
+            with redirect_stdout(stdout):
+                exit_code = handle_conversations(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Upcoming meeting: 12 on 2026-05-01", stdout.getvalue())
+        self.assertIn("[16] Tilbakemeldinger fra leder til medarbeider: Bra jobbet", stdout.getvalue())
+        self.assertNotIn("No visible answers have been entered yet.", stdout.getvalue())
+        service.upcoming_conversation.assert_called_once_with(None, self_only=True)
 
 
 if __name__ == "__main__":

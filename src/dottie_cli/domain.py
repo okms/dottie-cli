@@ -127,18 +127,50 @@ class DottieService:
         ) or []
         return sorted(meetings, key=lambda item: _parse_dt(item.get("date")))
 
-    def conversation_history(self, employee_query: str) -> tuple[dict[str, Any], list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
+    def _employee_for_query(self, employee_query: str | None, *, self_only: bool = False) -> dict[str, Any]:
+        if self_only:
+            my_id = self.my_employee_id()
+            me = self.client.get(f"/Employee/{my_id}")
+            if not me:
+                raise ValueError(f"Could not load current employee #{my_id}.")
+            return me
+
         employees = self.employees()
-        employee = _find_employee(employees, employee_query)
-        meetings = self.recurring_meetings_for(employee["id"])
+        if employee_query is None:
+            raise ValueError("Employee query cannot be empty.")
+        return _find_employee(employees, employee_query)
+
+    def _visible_recurring_meetings_for(self, employee_id: int) -> list[dict[str, Any]]:
+        meetings = self.recurring_meetings_for(employee_id)
+        if meetings or employee_id != self.my_employee_id():
+            return meetings
+
+        meetings = self.client.get(
+            "/RecurringMeeting",
+            query={"EmployeeId": [employee_id]},
+        ) or []
+        return sorted(meetings, key=lambda item: _parse_dt(item.get("date")))
+
+    def conversation_history(self, employee_query: str | None, *, self_only: bool = False) -> tuple[dict[str, Any], list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
+        employee = self._employee_for_query(employee_query, self_only=self_only)
+        meetings = self._visible_recurring_meetings_for(employee["id"])
         answers_by_meeting: dict[int, list[dict[str, Any]]] = {}
         for meeting in meetings:
             answers_by_meeting[meeting["id"]] = self.client.get("/RecurringMeetingAnswer", query={"RecurringMeetingId": meeting["id"]}) or []
         return employee, meetings, answers_by_meeting
 
+    def upcoming_conversation(self, employee_query: str | None, *, self_only: bool = False) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        employee = self._employee_for_query(employee_query, self_only=self_only)
+        meetings = self._visible_recurring_meetings_for(employee["id"])
+        upcoming = [meeting for meeting in meetings if int(meeting.get("status", -1)) == 0]
+        if not upcoming:
+            raise ValueError(f"No upcoming recurring meeting found for {employee['name']}.")
+        meeting = upcoming[0]
+        answers = self.client.get("/RecurringMeetingAnswer", query={"RecurringMeetingId": meeting["id"]}) or []
+        return employee, meeting, answers
+
     def prepare_note_sync(self, employee_query: str, leader_feedback: str | None = None) -> SyncPreview:
-        employees = self.employees()
-        employee = _find_employee(employees, employee_query)
+        employee = self._employee_for_query(employee_query)
         meetings = self.recurring_meetings_for(employee["id"])
 
         previous = [meeting for meeting in meetings if int(meeting.get("status", -1)) == 1]

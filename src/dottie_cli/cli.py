@@ -148,7 +148,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     conv_sub = conv_parser.add_subparsers(dest="conversation_command", required=True)
     history = conv_sub.add_parser("history", help="Show meetings and answers for one employee.")
-    history.add_argument("employee", help="Employee name or unique partial match.")
+    history_target = history.add_mutually_exclusive_group(required=True)
+    history_target.add_argument("employee", nargs="?", help="Employee name or unique partial match.")
+    history_target.add_argument("--self", dest="self_only", action="store_true", help="Show your own recurring meetings.")
+    upcoming = conv_sub.add_parser("upcoming", help="Show the next upcoming recurring meeting and any visible prefilled answers.")
+    upcoming_target = upcoming.add_mutually_exclusive_group(required=True)
+    upcoming_target.add_argument("employee", nargs="?", help="Employee name or unique partial match.")
+    upcoming_target.add_argument("--self", dest="self_only", action="store_true", help="Show your own upcoming recurring meeting.")
     sync = conv_sub.add_parser("sync-notes", help="Preview or apply append-only note updates for one employee.")
     sync.add_argument("employee", help="Employee name or unique partial match.")
     sync.add_argument("--leader-feedback", help="Optional leader feedback to write to the feedback question.")
@@ -285,7 +291,7 @@ def handle_absence(args: argparse.Namespace) -> int:
 def handle_conversations(args: argparse.Namespace) -> int:
     service = build_service(args)
     if args.conversation_command == "history":
-        employee, meetings, answers_by_meeting = service.conversation_history(args.employee)
+        employee, meetings, answers_by_meeting = service.conversation_history(args.employee, self_only=getattr(args, "self_only", False))
         payload = {
             "employee": employee,
             "meetings": meetings,
@@ -303,6 +309,27 @@ def handle_conversations(args: argparse.Namespace) -> int:
                 if answer_text:
                     print(f"  [{answer.get('index')}] {answer.get('question')}: {answer_text}")
             print()
+        return 0
+
+    if args.conversation_command == "upcoming":
+        employee, meeting, answers = service.upcoming_conversation(args.employee, self_only=getattr(args, "self_only", False))
+        visible_answers = [answer for answer in sorted(answers, key=lambda item: item.get("index", 0)) if (answer.get("answer") or "").strip()]
+        payload = {
+            "employee": employee,
+            "meeting": meeting,
+            "answers": answers,
+            "visibleAnswers": visible_answers,
+        }
+        if args.json:
+            print_json(payload)
+            return 0
+        print(f"Employee: {employee.get('name')} ({employee.get('id')})")
+        print(f"Upcoming meeting: {meeting.get('id')} on {iso_to_date(meeting.get('date'))}")
+        print()
+        if not visible_answers:
+            print("No visible answers have been entered yet.")
+        for answer in visible_answers:
+            print(f"[{answer.get('index')}] {answer.get('question')}: {(answer.get('answer') or '').strip()}")
         return 0
 
     preview = service.prepare_note_sync(args.employee, leader_feedback=args.leader_feedback)

@@ -115,6 +115,19 @@ Read conversation history for one employee:
 dottie conversations history "Employee Name"
 ```
 
+Read your own conversation history:
+
+```bash
+dottie conversations history --self
+```
+
+Read the next upcoming recurring meeting and any visible prefilled answers:
+
+```bash
+dottie conversations upcoming "Employee Name"
+dottie conversations upcoming --self
+```
+
 Preview append-only conversation note updates:
 
 ```bash
@@ -171,3 +184,16 @@ This CLI is intended to be straightforward to drive from another agent or automa
 - only escalate to `--apply` once the preview matches the intended note append
 
 No user or tenant identifiers are hard-coded in the source tree. The current employee is resolved from `app_uid` in the live token.
+
+## Publishing
+
+The repository is set up to publish to PyPI from GitHub Actions on version tags matching `v*`.
+
+Example release flow:
+
+```bash
+git tag v0.2.0
+git push origin main --tags
+```
+
+The publish workflow uses PyPI trusted publishing. Configure the `dottie-cli` project on PyPI to trust this repository and the `publish.yml` workflow before relying on the automated release path.
