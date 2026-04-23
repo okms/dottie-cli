@@ -16,10 +16,10 @@ dependencies = []
 
 [project.scripts]
 dottie = "dottie_cli.cli:main"
+dottie-cli = "dottie_cli.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

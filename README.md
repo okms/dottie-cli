@@ -75,6 +75,13 @@ Run without installing:
 python3 -m dottie_cli --help
 ```
 
+Once published, the package can be invoked through `uvx` with either command name:
+
+```bash
+uvx --from dottie-cli dottie --help
+uvx dottie-cli --help
+```
+
 ## Commands
 
 Read team members:
