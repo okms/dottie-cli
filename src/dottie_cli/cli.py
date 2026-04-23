@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .api import DottieAPIError, DottieClient
 from .auth import DEFAULT_TOKEN_PATH, TokenError, load_token
-from .domain import DottieService, summarize_team_by_org
+from .domain import ALLOWED_ANSWER_PROPERTIES, DottieService, summarize_team_by_org
 from .formatting import iso_to_date, print_json, print_table
 
 
@@ -350,14 +350,28 @@ def _load_answer_updates(args: argparse.Namespace) -> list[dict[str, object]]:
         if not isinstance(items, list) or not items:
             raise ValueError("JSON must contain a non-empty 'answers' array.")
         normalized: list[dict[str, object]] = []
-        for raw_item in items:
+        for position, raw_item in enumerate(items, start=1):
             if not isinstance(raw_item, dict):
                 raise ValueError("Each answers entry must be an object.")
+            index = raw_item.get("index")
+            if type(index) is not int:
+                raise ValueError(f"answers[{position}] must contain an integer 'index'.")
+            text = raw_item.get("text", "")
+            if not isinstance(text, str):
+                raise ValueError(f"answers[{position}] 'text' must be a string.")
+            prop = raw_item.get("property") or args.answer_property
+            if not isinstance(prop, str):
+                raise ValueError(f"answers[{position}] 'property' must be a string.")
+            if prop not in ALLOWED_ANSWER_PROPERTIES:
+                raise ValueError(
+                    f"answers[{position}] unsupported property {prop!r}; "
+                    f"must be one of {ALLOWED_ANSWER_PROPERTIES}."
+                )
             normalized.append(
                 {
-                    "index": raw_item.get("index"),
-                    "text": raw_item.get("text", ""),
-                    "property": raw_item.get("property") or args.answer_property,
+                    "index": index,
+                    "text": text,
+                    "property": prop,
                 }
             )
         return normalized
@@ -372,12 +386,18 @@ def handle_answer(service: DottieService, args: argparse.Namespace) -> int:
         updates=updates,
         footer=args.footer,
     )
+    results: list[dict[str, object]] = []
+    if args.json and args.apply and preview.patches:
+        results = service.apply_answer_updates(preview)
     payload = {
         "employee": {"id": preview.employee.get("id"), "name": preview.employee.get("name")},
         "currentMeeting": {"id": preview.current_meeting.get("id"), "date": preview.current_meeting.get("date")},
         "patches": preview.patches,
         "skipped": preview.skipped,
         "applyRequested": bool(args.apply),
+        "applied": bool(args.apply),
+        "appliedCount": len(preview.patches) if args.apply else 0,
+        "results": results,
     }
     if args.json:
         print_json(payload)
@@ -396,10 +416,9 @@ def handle_answer(service: DottieService, args: argparse.Namespace) -> int:
         if preview.patches and not args.apply:
             print("Preview only. Re-run with --apply to persist these changes.")
 
-    if args.apply and preview.patches:
+    if not args.json and args.apply and preview.patches:
         service.apply_answer_updates(preview)
-        if not args.json:
-            print(f"Applied {len(preview.patches)} patch(es).")
+        print(f"Applied {len(preview.patches)} patch(es).")
     return 0
 
 
@@ -451,12 +470,18 @@ def handle_conversations(args: argparse.Namespace) -> int:
         return handle_answer(service, args)
 
     preview = service.prepare_note_sync(args.employee, leader_feedback=args.leader_feedback)
+    results: list[dict[str, object]] = []
+    if args.json and args.apply and preview.patches:
+        results = service.apply_sync(preview)
     preview_payload = {
         "employee": {"id": preview.employee.get("id"), "name": preview.employee.get("name")},
         "previousMeeting": {"id": preview.previous_meeting.get("id"), "date": preview.previous_meeting.get("date")},
         "currentMeeting": {"id": preview.current_meeting.get("id"), "date": preview.current_meeting.get("date")},
         "patches": preview.patches,
         "applyRequested": bool(args.apply),
+        "applied": bool(args.apply),
+        "appliedCount": len(preview.patches) if args.apply else 0,
+        "results": results,
     }
     if args.json:
         print_json(preview_payload)
@@ -475,10 +500,9 @@ def handle_conversations(args: argparse.Namespace) -> int:
         if not args.apply:
             print("Preview only. Re-run with --apply to persist these changes.")
 
-    if args.apply:
+    if not args.json and args.apply:
         service.apply_sync(preview)
-        if not args.json:
-            print(f"Applied {len(preview.patches)} patch(es).")
+        print(f"Applied {len(preview.patches)} patch(es).")
     return 0
 
 

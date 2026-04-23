@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dottie-cli"
-version = "0.3.0"
+version = "0.3.1"
 description = "Token-based CLI for team, conversations, equipment, and absence in Dottie HR"
 readme = "README.md"
 requires-python = ">=3.11"

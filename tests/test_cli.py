@@ -1,11 +1,14 @@
 import argparse
 import io
+import json
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from dottie_cli.cli import build_parser, handle_conversations, main
+from dottie_cli.cli import _load_answer_updates, build_parser, handle_conversations, main
 
 
 class CliArgumentTests(unittest.TestCase):
@@ -126,6 +129,50 @@ class CliArgumentTests(unittest.TestCase):
         service.apply_sync.assert_called_once_with(preview)
         self.assertIn("Applied 2 patch(es).", stdout.getvalue())
         self.assertNotIn("Preview only.", stdout.getvalue())
+
+    def test_sync_notes_json_apply_reports_results_after_write(self) -> None:
+        preview = SimpleNamespace(
+            employee={"id": 7, "name": "Employee Name"},
+            previous_meeting={"id": 10, "date": "2026-04-01T09:00:00Z"},
+            current_meeting={"id": 11, "date": "2026-05-01T09:00:00Z"},
+            patches=[
+                {
+                    "id": 99,
+                    "index": 0,
+                    "question": "Oppfolging",
+                    "property": "privateNote",
+                    "value": "Generated note block",
+                    "entityId": 99,
+                    "replacesVersion": None,
+                }
+            ],
+        )
+        service = Mock()
+        service.prepare_note_sync.return_value = preview
+        service.apply_sync.return_value = [{"id": 99, "ok": True}]
+
+        args = argparse.Namespace(
+            command="conversations",
+            conversation_command="sync-notes",
+            employee="Employee Name",
+            leader_feedback=None,
+            apply=True,
+            dry_run=False,
+            json=True,
+            token_file=None,
+        )
+
+        stdout = io.StringIO()
+        with patch("dottie_cli.cli.build_service", return_value=service):
+            with redirect_stdout(stdout):
+                exit_code = handle_conversations(args)
+
+        self.assertEqual(exit_code, 0)
+        service.apply_sync.assert_called_once_with(preview)
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["applied"])
+        self.assertEqual(payload["appliedCount"], 1)
+        self.assertEqual(payload["results"], [{"id": 99, "ok": True}])
 
     def test_main_accepts_json_after_subcommand(self) -> None:
         service = Mock()
@@ -271,6 +318,20 @@ class AnswerCommandTests(unittest.TestCase):
             footer="sign",
         )
 
+    def test_answer_from_file_rejects_non_string_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            answer_file = Path(tmpdir) / "answers.json"
+            answer_file.write_text(json.dumps({"answers": [{"index": 1, "text": 123}]}), encoding="utf-8")
+            args = argparse.Namespace(
+                index=None,
+                text=None,
+                answer_property="answer",
+                from_file=answer_file,
+            )
+
+            with self.assertRaisesRegex(ValueError, "text.*string"):
+                _load_answer_updates(args)
+
     def test_answer_apply_invokes_apply_and_reports_count(self) -> None:
         preview = SimpleNamespace(
             employee={"id": 42, "name": "Me"},
@@ -309,16 +370,67 @@ class AnswerCommandTests(unittest.TestCase):
         )
         # inline has_inline=False without from_file => handler should error. Use from_file path.
 
-        import json as _json
-        import tempfile
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
-            tf.write(_json.dumps({"answers": [
-                {"index": 1, "text": "x"},
-                {"index": 10, "text": "y"},
-            ]}))
-            tf_path = tf.name
-        from pathlib import Path as _Path
-        args.from_file = _Path(tf_path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            answer_file = Path(tmpdir) / "answers.json"
+            answer_file.write_text(
+                json.dumps(
+                    {
+                        "answers": [
+                            {"index": 1, "text": "x"},
+                            {"index": 10, "text": "y"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args.from_file = answer_file
+
+            stdout = io.StringIO()
+            with patch("dottie_cli.cli.build_service", return_value=service):
+                with redirect_stdout(stdout):
+                    exit_code = handle_conversations(args)
+
+        self.assertEqual(exit_code, 0)
+        service.apply_answer_updates.assert_called_once_with(preview)
+        self.assertIn("Applied 2 patch(es).", stdout.getvalue())
+
+    def test_answer_json_apply_reports_results_after_write(self) -> None:
+        preview = SimpleNamespace(
+            employee={"id": 42, "name": "Me"},
+            current_meeting={"id": 11, "date": "2026-05-01T09:00:00Z"},
+            patches=[
+                {
+                    "id": 300,
+                    "index": 1,
+                    "question": "Q1",
+                    "property": "answer",
+                    "value": "x",
+                    "entityId": 300,
+                    "replacesVersion": None,
+                    "previousValue": "",
+                }
+            ],
+            skipped=[],
+        )
+        service = Mock()
+        service.prepare_answer_updates.return_value = preview
+        service.apply_answer_updates.return_value = [{"id": 300, "ok": True}]
+
+        args = argparse.Namespace(
+            command="conversations",
+            conversation_command="answer",
+            employee=None,
+            self_only=True,
+            index=1,
+            text="x",
+            answer_property="answer",
+            from_file=None,
+            footer=None,
+            apply=True,
+            dry_run=False,
+            json=True,
+            token_file=None,
+        )
 
         stdout = io.StringIO()
         with patch("dottie_cli.cli.build_service", return_value=service):
@@ -327,7 +439,10 @@ class AnswerCommandTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         service.apply_answer_updates.assert_called_once_with(preview)
-        self.assertIn("Applied 2 patch(es).", stdout.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["applied"])
+        self.assertEqual(payload["appliedCount"], 1)
+        self.assertEqual(payload["results"], [{"id": 300, "ok": True}])
 
     def test_answer_shows_skipped_entries(self) -> None:
         preview = SimpleNamespace(

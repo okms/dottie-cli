@@ -267,7 +267,7 @@ Release flow:
 
 ```bash
 # bump version in pyproject.toml, commit
-git tag v0.2.2
+git tag vX.Y.Z
 git push origin main --tags
 ```
 

@@ -22,6 +22,23 @@ class DomainTests(unittest.TestCase):
         merged = merge_private_note(f"Manuelt notat\n\n{generated}", generated)
         self.assertEqual(merged, f"Manuelt notat\n\n{generated}")
 
+    def test_merge_private_note_is_idempotent_for_same_generated_marker(self) -> None:
+        existing = (
+            "Manuelt notat\n\n"
+            "Notat fra forrige samtale (2026-04-01)\n"
+            "[dottie-cli recurring-meeting:99 index:1]\n\n"
+            "Maal\nForrige svar"
+        )
+        generated = (
+            "Notat fra forrige samtale (2026-04-01)\n"
+            "[dottie-cli recurring-meeting:99 index:1]\n\n"
+            "Maal\nOppdatert forrige svar"
+        )
+
+        merged = merge_private_note(existing, generated)
+
+        self.assertEqual(merged, existing)
+
     def test_follow_up_note_contains_all_answer_bullets(self) -> None:
         note = build_generated_private_note(
             current_index=0,
@@ -348,6 +365,20 @@ class PrepareAnswerUpdatesTests(unittest.TestCase):
                 None,
                 self_only=True,
                 updates=[{"index": 1, "text": "x", "property": "weird"}],
+                footer=None,
+            )
+
+    def test_rejects_non_string_text(self) -> None:
+        rows = [
+            {"id": 300, "index": 1, "question": "Q1", "answer": None, "version": "v1"},
+        ]
+        service = self._service_for_self(rows)
+
+        with self.assertRaisesRegex(ValueError, "text.*string"):
+            service.prepare_answer_updates(
+                None,
+                self_only=True,
+                updates=[{"index": 1, "text": 123, "property": "answer"}],
                 footer=None,
             )
 

@@ -288,10 +288,14 @@ class DottieService:
         skipped: list[dict[str, Any]] = []
         for update in updates:
             index = update.get("index")
-            if index is None:
-                raise ValueError("Answer update requires an 'index'.")
+            if type(index) is not int:
+                raise ValueError("Answer update requires an integer 'index'.")
             text = update.get("text", "")
+            if not isinstance(text, str):
+                raise ValueError("Answer update requires 'text' to be a string.")
             prop = (update.get("property") or "answer")
+            if not isinstance(prop, str):
+                raise ValueError("Answer update requires 'property' to be a string.")
             if prop not in ALLOWED_ANSWER_PROPERTIES:
                 raise ValueError(f"Unsupported property {prop!r}; must be one of {ALLOWED_ANSWER_PROPERTIES}.")
             target = by_index.get(index)
@@ -402,9 +406,20 @@ def merge_private_note(existing: str | None, generated: str) -> str:
     generated_text = generated.strip()
     if not existing_text:
         return generated_text
+    marker = _generated_note_marker(generated_text)
+    if marker and marker in existing_text:
+        return existing_text
     if generated_text in existing_text:
         return existing_text
     return f"{existing_text}\n\n{generated_text}"
+
+
+def _generated_note_marker(generated_text: str) -> str | None:
+    for line in generated_text.splitlines():
+        marker = line.strip()
+        if marker.startswith("[dottie-cli recurring-meeting:") and " index:" in marker and marker.endswith("]"):
+            return marker
+    return None
 
 
 def summarize_team_by_org(team: list[dict[str, Any]]) -> list[dict[str, Any]]:
