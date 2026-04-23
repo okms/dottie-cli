@@ -1,6 +1,8 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-from dottie_cli.domain import build_generated_private_note, merge_private_note
+from dottie_cli.domain import DottieService, build_generated_private_note, merge_private_note
 
 
 class DomainTests(unittest.TestCase):
@@ -29,6 +31,155 @@ class DomainTests(unittest.TestCase):
         self.assertIn("Oppsummering fra forrige samtale (2026-04-01)", note)
         self.assertIn("- Maal: To konkrete ting", note)
         self.assertIn("- Trivsel: Bra", note)
+
+    def test_prepare_note_sync_appends_to_existing_manual_private_note(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [{"id": 7, "name": "Employee Name"}],
+            [
+                {"id": 10, "employeeId": 7, "responsibleEmployeeId": 42, "status": 1, "date": "2026-04-01T09:00:00Z"},
+                {"id": 11, "employeeId": 7, "responsibleEmployeeId": 42, "status": 0, "date": "2026-05-01T09:00:00Z"},
+            ],
+            [
+                {"id": 200, "index": 1, "question": "Maal", "answer": "Forrige svar"},
+            ],
+            [
+                {
+                    "id": 300,
+                    "index": 1,
+                    "question": "Maal",
+                    "privateNote": "Manuelt notat fra leder",
+                    "version": "v1",
+                },
+            ],
+        ]
+
+        service = DottieService(client)
+        preview = service.prepare_note_sync("Employee Name")
+
+        self.assertEqual(len(preview.patches), 1)
+        patch = preview.patches[0]
+        self.assertEqual(patch["property"], "privateNote")
+        self.assertIn("Manuelt notat fra leder", patch["value"])
+        self.assertIn("Notat fra forrige samtale (2026-04-01)", patch["value"])
+        self.assertIn("Maal\nForrige svar", patch["value"])
+        self.assertTrue(patch["value"].startswith("Manuelt notat fra leder\n\n"))
+
+    def test_prepare_note_sync_rejects_missing_upcoming_meeting(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [{"id": 7, "name": "Employee Name"}],
+            [
+                {"id": 10, "employeeId": 7, "responsibleEmployeeId": 42, "status": 1, "date": "2026-04-01T09:00:00Z"},
+            ],
+        ]
+
+        service = DottieService(client)
+        with self.assertRaisesRegex(ValueError, "No upcoming recurring meeting found"):
+            service.prepare_note_sync("Employee Name")
+
+    def test_prepare_note_sync_rejects_missing_completed_meeting(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [{"id": 7, "name": "Employee Name"}],
+            [
+                {"id": 11, "employeeId": 7, "responsibleEmployeeId": 42, "status": 0, "date": "2026-05-01T09:00:00Z"},
+            ],
+        ]
+
+        service = DottieService(client)
+        with self.assertRaisesRegex(ValueError, "No completed recurring meeting found"):
+            service.prepare_note_sync("Employee Name")
+
+    def test_prepare_note_sync_ignores_blank_leader_feedback(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [{"id": 7, "name": "Employee Name"}],
+            [
+                {"id": 10, "employeeId": 7, "responsibleEmployeeId": 42, "status": 1, "date": "2026-04-01T09:00:00Z"},
+                {"id": 11, "employeeId": 7, "responsibleEmployeeId": 42, "status": 0, "date": "2026-05-01T09:00:00Z"},
+            ],
+            [
+                {"id": 200, "index": 1, "question": "Maal", "answer": ""},
+            ],
+            [
+                {
+                    "id": 301,
+                    "index": 16,
+                    "question": "Tilbakemelding",
+                    "privateNote": "",
+                    "answer": None,
+                    "version": "v2",
+                },
+            ],
+        ]
+
+        service = DottieService(client)
+        preview = service.prepare_note_sync("Employee Name", leader_feedback="   ")
+
+        self.assertEqual(preview.patches, [])
+
+    def test_conversation_history_rejects_ambiguous_employee_query(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.return_value = [
+            {"id": 7, "name": "Alex Hansen"},
+            {"id": 8, "name": "Alex Johansen"},
+        ]
+
+        service = DottieService(client)
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            service.conversation_history("Alex")
+
+    def test_team_falls_back_to_recurring_meeting_responsibility(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [],
+            [
+                {"employeeId": 8, "responsibleEmployeeId": 42, "status": 1, "date": "2026-04-01T09:00:00Z"},
+                {"employeeId": 7, "responsibleEmployeeId": 42, "status": 0, "date": "2026-05-01T09:00:00Z"},
+                {"employeeId": 8, "responsibleEmployeeId": 42, "status": 0, "date": "2026-06-01T09:00:00Z"},
+            ],
+            [
+                {"id": 8, "name": "Zed Employee"},
+                {"id": 7, "name": "Alpha Employee"},
+            ],
+        ]
+
+        service = DottieService(client)
+        team = service.team()
+
+        self.assertEqual([item["id"] for item in team], [7, 8])
+        self.assertEqual([item["name"] for item in team], ["Alpha Employee", "Zed Employee"])
+
+    def test_absence_overview_uses_leave_interval_query_endpoint(self) -> None:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            [{"id": 42, "name": "Me"}],
+            {"id": 42, "name": "Me"},
+        ]
+        client.post.return_value = [
+            {"employeeName": "Me", "dateStart": "2026-01-01T00:00:00Z", "leaveRequestId": 10},
+        ]
+
+        service = DottieService(client)
+        result = service.absence_overview(from_date="2026-01-01", to_date="2026-12-31", include_self=True)
+
+        self.assertEqual(result[0]["leaveRequestId"], 10)
+        client.post.assert_called_once_with(
+            "/LeaveInterval/Query",
+            body={
+                "employeeId": [42],
+                "from": "2026-01-01",
+                "to": "2026-12-31",
+            },
+        )
 
 
 if __name__ == "__main__":

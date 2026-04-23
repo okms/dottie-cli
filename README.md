@@ -1,34 +1,34 @@
 # dottie-cli
 
-`dottie-cli` is a Python command line tool for reading team data from Dottie HR and for preparing recurring conversations without overwriting a manager's earlier private notes.
+`dottie-cli` is a Python command line interface for the Dottie HR web application at `https://app.dottie.no` and the corresponding API at `https://api.dottie.no`.
 
-It is built for agent workflows as much as for direct shell use:
+The tool is designed for both direct shell use and agent-driven workflows:
 
 - read commands are stable and scriptable
 - write commands default to preview mode
 - token handling is explicit and never committed
 - output can be table-shaped for people or JSON for automation
 
-## Scope
+## Features
 
-The first cut covers the workflow you described:
+Current command coverage includes:
 
-- get all members of your team
-- get an overview of who is in your team
-- inspect equipment assigned to your team
-- inspect scheduled vacation and other absence for yourself and your team
-- follow up recurring conversations by appending internal notes from the previous meeting into the upcoming one
+- team membership and team overview
+- equipment assigned to team members
+- scheduled vacation and other absence for the current employee and team scope
+- recurring meeting history
+- append-only manager note preparation for upcoming recurring meetings
 
 ## Authentication
 
-The CLI uses a short-lived JWT from the live Dottie web app. It does not mint credentials, store refresh tokens, or expect secrets in the repository.
+The CLI uses a short-lived JWT from the live Dottie web application. It does not mint credentials, store refresh tokens, or expect secrets in the repository.
 
 Default lookup order:
 
 1. `DOTTIE_TOKEN` environment variable
 2. `~/.dottie-token`
 
-The token must be the app token used against `https://api.dottie.no`, not a generic identity token.
+The token must be the Dottie application token used against `https://api.dottie.no`, not a generic identity token.
 
 ## Token Capture
 
@@ -139,7 +139,7 @@ dottie conversations sync-notes "Employee Name" \
 
 ## API Basis
 
-The command layout is based on Dottie's public OpenAPI document at:
+The command layout is based on Dottie's public OpenAPI document:
 
 - `https://api.dottie.no/swagger/index.html`
 - `https://api.dottie.no/swagger/v1/swagger.json`
@@ -156,7 +156,7 @@ Relevant resources used by this CLI:
 
 ## Notes for Agents
 
-This CLI is meant to be easy to drive from another agent or automation layer:
+This CLI is intended to be straightforward to drive from another agent or automation layer:
 
 - prefer `--json` when another tool will consume the result
 - use `token status` as a preflight
@@ -164,4 +164,3 @@ This CLI is meant to be easy to drive from another agent or automation layer:
 - only escalate to `--apply` once the preview matches the intended note append
 
 No user or tenant identifiers are hard-coded in the source tree. The current employee is resolved from `app_uid` in the live token.
-

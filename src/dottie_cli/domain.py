@@ -55,14 +55,24 @@ class DottieService:
     def employees(self) -> list[dict[str, Any]]:
         return self.client.get("/Employee") or []
 
+    def _team_via_recurring_meetings(self) -> list[dict[str, Any]]:
+        meetings = self.client.get("/RecurringMeeting", query={"ResponsibleEmployeeId": self.my_employee_id()}) or []
+        employee_ids = sorted({item.get("employeeId") for item in meetings if item.get("employeeId")})
+        if not employee_ids:
+            return []
+        return self.client.get("/Employee", query={"EmployeeId": employee_ids}) or []
+
     def team(self, include_self: bool = False) -> list[dict[str, Any]]:
         my_id = self.my_employee_id()
         team = self.client.get("/Employee", query={"LeaderId": my_id}) or []
+        if not team:
+            team = self._team_via_recurring_meetings()
         if include_self:
             me = self.client.get(f"/Employee/{my_id}")
             if me:
                 team = [me, *team]
-        return sorted(team, key=lambda item: str(item.get("name", "")))
+        unique_team = {item["id"]: item for item in team if item.get("id") is not None}
+        return sorted(unique_team.values(), key=lambda item: str(item.get("name", "")))
 
     def equipment_overview(self, include_self: bool = False) -> list[dict[str, Any]]:
         team = self.team(include_self=include_self)
@@ -97,15 +107,12 @@ class DottieService:
     def absence_overview(self, *, from_date: str | None, to_date: str | None, include_self: bool = True) -> list[dict[str, Any]]:
         team = self.team(include_self=include_self)
         employee_ids = [employee["id"] for employee in team]
-        requests = self.client.get("/LeaveRequest", query={"EmployeeId": employee_ids}) or []
-        request_ids = [item["id"] for item in requests]
-        intervals = self.client.get(
-            "/LeaveInterval",
-            query={
-                "EmployeeId": employee_ids,
-                "RequestId": request_ids or None,
-                "From": from_date,
-                "To": to_date,
+        intervals = self.client.post(
+            "/LeaveInterval/Query",
+            body={
+                "employeeId": employee_ids,
+                "from": from_date,
+                "to": to_date,
             },
         ) or []
         return sorted(intervals, key=lambda item: (item.get("dateStart", ""), item.get("employeeName", "")))
@@ -178,7 +185,8 @@ class DottieService:
                     }
                 )
 
-        if leader_feedback:
+        normalized_feedback = (leader_feedback or "").strip()
+        if normalized_feedback:
             feedback_candidates = [item for item in current_answers if item.get("index") == LEADER_FEEDBACK_INDEX]
             if feedback_candidates:
                 feedback_target = feedback_candidates[0]
@@ -186,7 +194,7 @@ class DottieService:
                     {
                         "id": feedback_target["id"],
                         "property": "answer",
-                        "value": leader_feedback.strip(),
+                        "value": normalized_feedback,
                         "entityId": feedback_target["id"],
                         "replacesVersion": feedback_target.get("version"),
                         "question": feedback_target.get("question"),
@@ -269,4 +277,3 @@ def summarize_team_by_org(team: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for org_unit_id, members in sorted(buckets.items(), key=lambda item: item[0]):
         summary.append({"organizationUnitId": org_unit_id, "members": len(members)})
     return summary
-

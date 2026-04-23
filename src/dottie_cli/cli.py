@@ -37,6 +37,31 @@ class RichHelpFormatter(argparse.RawDescriptionHelpFormatter, argparse.ArgumentD
     pass
 
 
+def normalize_global_flags(argv: list[str] | None) -> list[str] | None:
+    if argv is None:
+        return None
+
+    remaining = list(argv)
+    prefix: list[str] = []
+
+    idx = 0
+    while idx < len(remaining):
+        token = remaining[idx]
+        if token == "--json":
+            prefix.append(token)
+            del remaining[idx]
+            continue
+        if token == "--token-file":
+            if idx + 1 >= len(remaining):
+                return list(argv)
+            prefix.extend([token, remaining[idx + 1]])
+            del remaining[idx : idx + 2]
+            continue
+        idx += 1
+
+    return [*prefix, *remaining]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dottie",
@@ -127,8 +152,9 @@ def build_parser() -> argparse.ArgumentParser:
     sync = conv_sub.add_parser("sync-notes", help="Preview or apply append-only note updates for one employee.")
     sync.add_argument("employee", help="Employee name or unique partial match.")
     sync.add_argument("--leader-feedback", help="Optional leader feedback to write to the feedback question.")
-    sync.add_argument("--apply", action="store_true", help="Apply PATCH requests after showing the preview.")
-    sync.add_argument(
+    mode = sync.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="Apply PATCH requests after showing the preview.")
+    mode.add_argument(
         "--dry-run",
         action="store_true",
         help="Explicitly request preview mode. This is the default unless --apply is given.",
@@ -301,6 +327,8 @@ def handle_conversations(args: argparse.Namespace) -> int:
             print(f"property: {patch['property']}")
             print(patch["value"])
             print()
+        if not args.apply:
+            print("Preview only. Re-run with --apply to persist these changes.")
 
     if args.apply:
         service.apply_sync(preview)
@@ -311,7 +339,8 @@ def handle_conversations(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    effective_argv = list(sys.argv[1:]) if argv is None else argv
+    args = parser.parse_args(normalize_global_flags(effective_argv))
     try:
         if args.command == "token":
             return handle_token(args)
@@ -332,4 +361,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
