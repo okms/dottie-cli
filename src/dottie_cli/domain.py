@@ -45,6 +45,29 @@ class SyncPreview:
     patches: list[dict[str, Any]]
 
 
+@dataclass
+class AnswerPreview:
+    employee: dict[str, Any]
+    current_meeting: dict[str, Any]
+    patches: list[dict[str, Any]]
+    skipped: list[dict[str, Any]]
+
+
+ALLOWED_ANSWER_PROPERTIES = ("answer", "privateNote")
+
+
+def compose_answer_value(new_text: str, existing: str | None, footer: str | None) -> str:
+    stripped_text = (new_text or "").rstrip()
+    footer_text = (footer or "").strip()
+    if not footer_text:
+        return stripped_text
+    if footer_text in stripped_text:
+        return stripped_text
+    if stripped_text:
+        return f"{stripped_text}\n\n{footer_text}"
+    return footer_text
+
+
 class DottieService:
     def __init__(self, client: DottieClient):
         self.client = client
@@ -240,6 +263,89 @@ class DottieService:
             previous_meeting=previous_meeting,
             patches=patches,
         )
+
+    def prepare_answer_updates(
+        self,
+        employee_query: str | None,
+        *,
+        self_only: bool = False,
+        updates: list[dict[str, Any]],
+        footer: str | None = None,
+    ) -> AnswerPreview:
+        if not updates:
+            raise ValueError("At least one answer update is required.")
+
+        employee = self._employee_for_query(employee_query, self_only=self_only)
+        meetings = self._visible_recurring_meetings_for(employee["id"])
+        upcoming = [meeting for meeting in meetings if int(meeting.get("status", -1)) == 0]
+        if not upcoming:
+            raise ValueError(f"No upcoming recurring meeting found for {employee['name']}.")
+        meeting = upcoming[0]
+        answers = self.client.get("/RecurringMeetingAnswer", query={"RecurringMeetingId": meeting["id"]}) or []
+        by_index = {item.get("index"): item for item in answers}
+
+        patches: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for update in updates:
+            index = update.get("index")
+            if index is None:
+                raise ValueError("Answer update requires an 'index'.")
+            text = update.get("text", "")
+            prop = (update.get("property") or "answer")
+            if prop not in ALLOWED_ANSWER_PROPERTIES:
+                raise ValueError(f"Unsupported property {prop!r}; must be one of {ALLOWED_ANSWER_PROPERTIES}.")
+            target = by_index.get(index)
+            if target is None:
+                raise ValueError(f"Upcoming meeting has no answer row at index {index}.")
+
+            existing = target.get(prop)
+            new_value = compose_answer_value(text, existing, footer)
+            current_value = (existing or "")
+            if new_value == current_value:
+                skipped.append(
+                    {
+                        "id": target["id"],
+                        "index": index,
+                        "question": target.get("question"),
+                        "property": prop,
+                        "value": new_value,
+                        "reason": "value-unchanged",
+                    }
+                )
+                continue
+
+            patches.append(
+                {
+                    "id": target["id"],
+                    "index": index,
+                    "question": target.get("question"),
+                    "property": prop,
+                    "value": new_value,
+                    "entityId": target["id"],
+                    "replacesVersion": target.get("version"),
+                    "previousValue": current_value,
+                }
+            )
+
+        return AnswerPreview(
+            employee=employee,
+            current_meeting=meeting,
+            patches=patches,
+            skipped=skipped,
+        )
+
+    def apply_answer_updates(self, preview: AnswerPreview) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for patch in preview.patches:
+            payload = {
+                "property": patch["property"],
+                "value": patch["value"],
+                "entityId": patch["entityId"],
+                "replacesVersion": patch.get("replacesVersion"),
+            }
+            result = self.client.patch(f"/RecurringMeetingAnswer/{patch['id']}", body=payload)
+            results.append(result or payload)
+        return results
 
     def apply_sync(self, preview: SyncPreview) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []

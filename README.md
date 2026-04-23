@@ -22,6 +22,7 @@ Current command coverage includes:
 - recurring meeting history, including self-history for employees
 - the next upcoming recurring meeting and any visible prefilled answers
 - append-only manager note preparation for upcoming recurring meetings
+- direct write of `answer` or `privateNote` fields on the upcoming meeting (single index or bulk from JSON)
 
 ## Install
 
@@ -188,6 +189,33 @@ dottie conversations sync-notes "Employee Name" \
   --apply
 ```
 
+Write a single answer on the upcoming meeting (yours or a direct report's):
+
+```bash
+dottie conversations answer --self --index 1 --text "..." --dry-run
+dottie conversations answer --self --index 1 --text "..." --apply
+dottie conversations answer "Employee Name" --index 16 --text "..." --apply
+```
+
+Write multiple answers in one call via a JSON file:
+
+```bash
+cat > answers.json <<'EOF'
+{
+  "answers": [
+    {"index": 1,  "text": "..."},
+    {"index": 10, "text": "..."}
+  ]
+}
+EOF
+
+dottie conversations answer --self --from-file answers.json --apply
+```
+
+Use `--property privateNote` to target the manager-private note field instead
+of the shared `answer` field. Updates that would not change the stored value
+are reported as skipped and do not generate a PATCH.
+
 ## Write Safety
 
 `sync-notes` is intentionally append-only for private notes:
@@ -197,6 +225,11 @@ dottie conversations sync-notes "Employee Name" \
 - a small provenance marker is included so repeated runs do not duplicate the same note block
 - feedback writes are explicit through `--leader-feedback`
 - without `--apply`, no PATCH requests are sent
+
+`answer` replaces the target field's value (unlike `sync-notes`):
+
+- the preview shows every patch with the final composed value before any PATCH runs
+- updates that would write the same value already present are reported as `skipped`
 
 ## API Basis
 

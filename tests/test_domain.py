@@ -2,7 +2,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from dottie_cli.domain import DottieService, build_generated_private_note, merge_private_note
+from dottie_cli.domain import (
+    DottieService,
+    build_generated_private_note,
+    compose_answer_value,
+    merge_private_note,
+)
 
 
 class DomainTests(unittest.TestCase):
@@ -245,6 +250,106 @@ class DomainTests(unittest.TestCase):
                 "to": "2026-12-31",
             },
         )
+
+
+class ComposeAnswerValueTests(unittest.TestCase):
+    def test_appends_footer_with_blank_line(self) -> None:
+        result = compose_answer_value("Min tekst", existing=None, footer="signatur")
+        self.assertEqual(result, "Min tekst\n\nsignatur")
+
+    def test_skips_footer_when_already_present_in_new_text(self) -> None:
+        result = compose_answer_value("Ferdig tekst\n\nsignatur", existing=None, footer="signatur")
+        self.assertEqual(result, "Ferdig tekst\n\nsignatur")
+
+    def test_uses_only_footer_when_new_text_is_empty(self) -> None:
+        result = compose_answer_value("", existing="eksisterende", footer="signatur")
+        self.assertEqual(result, "signatur")
+
+    def test_returns_text_verbatim_when_footer_is_blank(self) -> None:
+        result = compose_answer_value("Min tekst", existing="noe annet", footer="")
+        self.assertEqual(result, "Min tekst")
+
+
+class PrepareAnswerUpdatesTests(unittest.TestCase):
+    def _service_for_self(self, answer_rows: list[dict]) -> DottieService:
+        client = Mock()
+        client.token_bundle = SimpleNamespace(claims={"app_uid": 42})
+        client.get.side_effect = [
+            {"id": 42, "name": "Me"},
+            [
+                {"id": 11, "employeeId": 42, "responsibleEmployeeId": 99, "status": 0, "date": "2026-05-01T09:00:00Z"},
+            ],
+            answer_rows,
+        ]
+        return DottieService(client)
+
+    def test_patches_include_footer_and_skip_when_unchanged(self) -> None:
+        rows = [
+            {"id": 300, "index": 1, "question": "Q1", "answer": None, "version": "v1"},
+            {"id": 301, "index": 10, "question": "Q10", "answer": "gammelt svar", "version": "v2"},
+        ]
+        service = self._service_for_self(rows)
+
+        preview = service.prepare_answer_updates(
+            None,
+            self_only=True,
+            updates=[
+                {"index": 1, "text": "ny statistikk", "property": "answer"},
+                {"index": 10, "text": "gammelt svar", "property": "answer"},
+            ],
+            footer="sign",
+        )
+
+        self.assertEqual(len(preview.patches), 2)
+        patch_by_index = {patch["index"]: patch for patch in preview.patches}
+        self.assertEqual(patch_by_index[1]["value"], "ny statistikk\n\nsign")
+        self.assertEqual(patch_by_index[1]["property"], "answer")
+        self.assertEqual(patch_by_index[10]["value"], "gammelt svar\n\nsign")
+
+    def test_skips_updates_that_produce_identical_value(self) -> None:
+        rows = [
+            {"id": 300, "index": 1, "question": "Q1", "answer": "eksisterende\n\nsign", "version": "v1"},
+        ]
+        service = self._service_for_self(rows)
+
+        preview = service.prepare_answer_updates(
+            None,
+            self_only=True,
+            updates=[{"index": 1, "text": "eksisterende", "property": "answer"}],
+            footer="sign",
+        )
+
+        self.assertEqual(preview.patches, [])
+        self.assertEqual(len(preview.skipped), 1)
+        self.assertEqual(preview.skipped[0]["reason"], "value-unchanged")
+
+    def test_raises_for_unknown_index(self) -> None:
+        rows = [
+            {"id": 300, "index": 1, "question": "Q1", "answer": None, "version": "v1"},
+        ]
+        service = self._service_for_self(rows)
+
+        with self.assertRaisesRegex(ValueError, "no answer row at index 99"):
+            service.prepare_answer_updates(
+                None,
+                self_only=True,
+                updates=[{"index": 99, "text": "oops", "property": "answer"}],
+                footer=None,
+            )
+
+    def test_rejects_unknown_property(self) -> None:
+        rows = [
+            {"id": 300, "index": 1, "question": "Q1", "answer": None, "version": "v1"},
+        ]
+        service = self._service_for_self(rows)
+
+        with self.assertRaisesRegex(ValueError, "Unsupported property"):
+            service.prepare_answer_updates(
+                None,
+                self_only=True,
+                updates=[{"index": 1, "text": "x", "property": "weird"}],
+                footer=None,
+            )
 
 
 if __name__ == "__main__":

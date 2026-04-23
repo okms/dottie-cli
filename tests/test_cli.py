@@ -205,5 +205,166 @@ class CliArgumentTests(unittest.TestCase):
         service.upcoming_conversation.assert_called_once_with(None, self_only=True)
 
 
+class AnswerCommandTests(unittest.TestCase):
+    def test_answer_requires_target(self) -> None:
+        parser = build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["conversations", "answer", "--index", "1", "--text", "x"])
+
+    def test_answer_rejects_apply_and_dry_run_together(self) -> None:
+        parser = build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                ["conversations", "answer", "--self", "--index", "1", "--text", "x", "--apply", "--dry-run"]
+            )
+
+    def test_answer_dry_run_preview_does_not_call_apply(self) -> None:
+        preview = SimpleNamespace(
+            employee={"id": 42, "name": "Me"},
+            current_meeting={"id": 11, "date": "2026-05-01T09:00:00Z"},
+            patches=[
+                {
+                    "id": 300,
+                    "index": 1,
+                    "question": "Q1",
+                    "property": "answer",
+                    "value": "ny tekst\n\nsign",
+                    "entityId": 300,
+                    "replacesVersion": "v1",
+                    "previousValue": "",
+                }
+            ],
+            skipped=[],
+        )
+        service = Mock()
+        service.prepare_answer_updates.return_value = preview
+
+        args = argparse.Namespace(
+            command="conversations",
+            conversation_command="answer",
+            employee=None,
+            self_only=True,
+            index=1,
+            text="ny tekst",
+            answer_property="answer",
+            from_file=None,
+            footer="sign",
+            apply=False,
+            dry_run=False,
+            json=False,
+            token_file=None,
+        )
+
+        stdout = io.StringIO()
+        with patch("dottie_cli.cli.build_service", return_value=service):
+            with redirect_stdout(stdout):
+                exit_code = handle_conversations(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Preview only.", stdout.getvalue())
+        self.assertIn("ny tekst\n\nsign", stdout.getvalue())
+        service.apply_answer_updates.assert_not_called()
+        service.prepare_answer_updates.assert_called_once_with(
+            None,
+            self_only=True,
+            updates=[{"index": 1, "text": "ny tekst", "property": "answer"}],
+            footer="sign",
+        )
+
+    def test_answer_apply_invokes_apply_and_reports_count(self) -> None:
+        preview = SimpleNamespace(
+            employee={"id": 42, "name": "Me"},
+            current_meeting={"id": 11, "date": "2026-05-01T09:00:00Z"},
+            patches=[
+                {
+                    "id": 300, "index": 1, "question": "Q1",
+                    "property": "answer", "value": "x", "entityId": 300, "replacesVersion": None,
+                    "previousValue": "",
+                },
+                {
+                    "id": 301, "index": 10, "question": "Q10",
+                    "property": "answer", "value": "y", "entityId": 301, "replacesVersion": None,
+                    "previousValue": "",
+                },
+            ],
+            skipped=[],
+        )
+        service = Mock()
+        service.prepare_answer_updates.return_value = preview
+
+        args = argparse.Namespace(
+            command="conversations",
+            conversation_command="answer",
+            employee=None,
+            self_only=True,
+            index=None,
+            text=None,
+            answer_property="answer",
+            from_file=None,
+            footer=None,
+            apply=True,
+            dry_run=False,
+            json=False,
+            token_file=None,
+        )
+        # inline has_inline=False without from_file => handler should error. Use from_file path.
+
+        import json as _json
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+            tf.write(_json.dumps({"answers": [
+                {"index": 1, "text": "x"},
+                {"index": 10, "text": "y"},
+            ]}))
+            tf_path = tf.name
+        from pathlib import Path as _Path
+        args.from_file = _Path(tf_path)
+
+        stdout = io.StringIO()
+        with patch("dottie_cli.cli.build_service", return_value=service):
+            with redirect_stdout(stdout):
+                exit_code = handle_conversations(args)
+
+        self.assertEqual(exit_code, 0)
+        service.apply_answer_updates.assert_called_once_with(preview)
+        self.assertIn("Applied 2 patch(es).", stdout.getvalue())
+
+    def test_answer_shows_skipped_entries(self) -> None:
+        preview = SimpleNamespace(
+            employee={"id": 42, "name": "Me"},
+            current_meeting={"id": 11, "date": "2026-05-01T09:00:00Z"},
+            patches=[],
+            skipped=[{"index": 1, "question": "Q1", "property": "answer", "reason": "value-unchanged"}],
+        )
+        service = Mock()
+        service.prepare_answer_updates.return_value = preview
+
+        args = argparse.Namespace(
+            command="conversations",
+            conversation_command="answer",
+            employee=None,
+            self_only=True,
+            index=1,
+            text="x",
+            answer_property="answer",
+            from_file=None,
+            footer=None,
+            apply=False,
+            dry_run=False,
+            json=False,
+            token_file=None,
+        )
+
+        stdout = io.StringIO()
+        with patch("dottie_cli.cli.build_service", return_value=service):
+            with redirect_stdout(stdout):
+                exit_code = handle_conversations(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("skipped (value-unchanged)", stdout.getvalue())
+        # No patches → preview-only banner suppressed
+        self.assertNotIn("Preview only.", stdout.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

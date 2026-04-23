@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -155,6 +156,46 @@ def build_parser() -> argparse.ArgumentParser:
     upcoming_target = upcoming.add_mutually_exclusive_group(required=True)
     upcoming_target.add_argument("employee", nargs="?", help="Employee name or unique partial match.")
     upcoming_target.add_argument("--self", dest="self_only", action="store_true", help="Show your own upcoming recurring meeting.")
+    answer = conv_sub.add_parser(
+        "answer",
+        help="Write one or more answer (or privateNote) values on the upcoming meeting.",
+        formatter_class=RichHelpFormatter,
+        description=(
+            "Set the 'answer' field (default) or 'privateNote' on one or more questions of the next "
+            "upcoming recurring meeting. Use --self to target your own meeting, or pass the employee name "
+            "when you are the responsible leader. Shows a diff preview; --apply persists."
+        ),
+    )
+    answer_target = answer.add_mutually_exclusive_group(required=True)
+    answer_target.add_argument("employee", nargs="?", help="Employee name or unique partial match.")
+    answer_target.add_argument("--self", dest="self_only", action="store_true", help="Target your own upcoming meeting.")
+    answer.add_argument("--index", type=int, help="Question index to write.")
+    answer.add_argument("--text", help="Value to write on the given --index.")
+    answer.add_argument(
+        "--property",
+        dest="answer_property",
+        choices=("answer", "privateNote"),
+        default="answer",
+        help="Field to patch (default: answer).",
+    )
+    answer.add_argument(
+        "--from-file",
+        dest="from_file",
+        type=Path,
+        help="JSON file with {\"answers\": [{\"index\":N,\"text\":\"...\",\"property\":\"answer|privateNote\"}]}.",
+    )
+    answer.add_argument(
+        "--footer",
+        help="Footer appended (with blank-line separator) unless already present in the final text.",
+    )
+    answer_mode = answer.add_mutually_exclusive_group()
+    answer_mode.add_argument("--apply", action="store_true", help="Persist the patches after the preview.")
+    answer_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Explicitly request preview mode. This is the default unless --apply is given.",
+    )
+
     sync = conv_sub.add_parser("sync-notes", help="Preview or apply append-only note updates for one employee.")
     sync.add_argument("employee", help="Employee name or unique partial match.")
     sync.add_argument("--leader-feedback", help="Optional leader feedback to write to the feedback question.")
@@ -288,6 +329,80 @@ def handle_absence(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_answer_updates(args: argparse.Namespace) -> list[dict[str, object]]:
+    has_inline = args.index is not None or args.text is not None
+    if has_inline and args.from_file:
+        raise ValueError("Use either --index/--text or --from-file, not both.")
+    if has_inline:
+        if args.index is None or args.text is None:
+            raise ValueError("--index and --text must be given together.")
+        return [{"index": args.index, "text": args.text, "property": args.answer_property}]
+    if args.from_file:
+        try:
+            raw = args.from_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Could not read {args.from_file}: {exc}") from exc
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in {args.from_file}: {exc}") from exc
+        items = payload.get("answers") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or not items:
+            raise ValueError("JSON must contain a non-empty 'answers' array.")
+        normalized: list[dict[str, object]] = []
+        for raw_item in items:
+            if not isinstance(raw_item, dict):
+                raise ValueError("Each answers entry must be an object.")
+            normalized.append(
+                {
+                    "index": raw_item.get("index"),
+                    "text": raw_item.get("text", ""),
+                    "property": raw_item.get("property") or args.answer_property,
+                }
+            )
+        return normalized
+    raise ValueError("Provide --index/--text or --from-file.")
+
+
+def handle_answer(service: DottieService, args: argparse.Namespace) -> int:
+    updates = _load_answer_updates(args)
+    preview = service.prepare_answer_updates(
+        args.employee,
+        self_only=getattr(args, "self_only", False),
+        updates=updates,
+        footer=args.footer,
+    )
+    payload = {
+        "employee": {"id": preview.employee.get("id"), "name": preview.employee.get("name")},
+        "currentMeeting": {"id": preview.current_meeting.get("id"), "date": preview.current_meeting.get("date")},
+        "patches": preview.patches,
+        "skipped": preview.skipped,
+        "applyRequested": bool(args.apply),
+    }
+    if args.json:
+        print_json(payload)
+    else:
+        print(f"Employee: {preview.employee.get('name')} ({preview.employee.get('id')})")
+        print(f"Upcoming meeting: {preview.current_meeting.get('id')} on {iso_to_date(preview.current_meeting.get('date'))}")
+        print()
+        if not preview.patches and not preview.skipped:
+            print("No updates to apply.")
+        for patch in preview.patches:
+            print(f"[{patch['index']}] {patch.get('question')}  ({patch['property']})")
+            print(patch["value"])
+            print()
+        for skipped in preview.skipped:
+            print(f"[{skipped['index']}] {skipped.get('question')}  ({skipped['property']}) — skipped ({skipped.get('reason')})")
+        if preview.patches and not args.apply:
+            print("Preview only. Re-run with --apply to persist these changes.")
+
+    if args.apply and preview.patches:
+        service.apply_answer_updates(preview)
+        if not args.json:
+            print(f"Applied {len(preview.patches)} patch(es).")
+    return 0
+
+
 def handle_conversations(args: argparse.Namespace) -> int:
     service = build_service(args)
     if args.conversation_command == "history":
@@ -331,6 +446,9 @@ def handle_conversations(args: argparse.Namespace) -> int:
         for answer in visible_answers:
             print(f"[{answer.get('index')}] {answer.get('question')}: {(answer.get('answer') or '').strip()}")
         return 0
+
+    if args.conversation_command == "answer":
+        return handle_answer(service, args)
 
     preview = service.prepare_note_sync(args.employee, leader_feedback=args.leader_feedback)
     preview_payload = {
